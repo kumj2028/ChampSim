@@ -1,9 +1,26 @@
+/*
+ *    Copyright 2023 The ChampSim Contributors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #include "champsim.h"
 
 #include <algorithm>
 #include <array>
 #include <bitset>
 #include <chrono>
+#include <cmath>
 #include <fstream>
 #include <functional>
 #include <getopt.h>
@@ -14,6 +31,7 @@
 
 #include "ooo_cpu.h"
 #include "operable.h"
+#include "phase_info.h"
 #include "tracereader.h"
 
 auto start_time = std::chrono::steady_clock::now();
@@ -34,7 +52,7 @@ struct phase_info {
 };
 
 int champsim_main(std::vector<std::reference_wrapper<O3_CPU>>& ooo_cpu, std::vector<std::reference_wrapper<champsim::operable>>& operables,
-                  std::vector<phase_info>& phases, bool knob_cloudsuite, std::vector<std::string_view> trace_names)
+                  std::vector<champsim::phase_info>& phases, bool knob_cloudsuite, std::vector<std::string> trace_names)
 {
   for (champsim::operable& op : operables)
     op.initialize();
@@ -44,7 +62,7 @@ int champsim_main(std::vector<std::reference_wrapper<O3_CPU>>& ooo_cpu, std::vec
     traces.push_back(get_tracereader(name, traces.size(), knob_cloudsuite));
 
   // simulation entry point
-  for (auto [phase_name, is_warmup, length] : phases) {
+  for (auto [phase_name, is_warmup, length, ignored] : phases) {
     // Initialize phase
     for (champsim::operable& op : operables) {
       op.warmup = is_warmup;
@@ -74,8 +92,11 @@ int champsim_main(std::vector<std::reference_wrapper<O3_CPU>>& ooo_cpu, std::vec
 
       // Read from trace
       for (O3_CPU& cpu : ooo_cpu) {
-        while (std::size(cpu.input_queue) < cpu.IN_QUEUE_SIZE) {
-          cpu.input_queue.push_back((*traces[cpu.cpu])());
+        auto num_instrs = cpu.IN_QUEUE_SIZE - std::size(cpu.input_queue);
+        std::vector<typename decltype(cpu.input_queue)::value_type> from_trace{};
+
+        for (std::size_t i = 0; i < num_instrs; ++i) {
+          from_trace.push_back((*traces[cpu.cpu])());
 
           // Reopen trace if we've reached the end of the file
           if (traces[cpu.cpu]->eof()) {
@@ -84,6 +105,8 @@ int champsim_main(std::vector<std::reference_wrapper<O3_CPU>>& ooo_cpu, std::vec
             traces[cpu.cpu] = get_tracereader(name, cpu.cpu, knob_cloudsuite);
           }
         }
+
+        cpu.input_queue.insert(std::cend(cpu.input_queue), std::begin(from_trace), std::end(from_trace));
       }
 
       // Check for phase finish
@@ -96,7 +119,8 @@ int champsim_main(std::vector<std::reference_wrapper<O3_CPU>>& ooo_cpu, std::vec
             op.end_phase(cpu.cpu);
 
           std::cout << phase_name << " finished CPU " << cpu.cpu;
-          std::cout << " instructions: " << cpu.sim_instr() << " cycles: " << cpu.sim_cycle() << " cumulative IPC: " << 1.0 * cpu.sim_instr() / cpu.sim_cycle();
+          std::cout << " instructions: " << cpu.sim_instr() << " cycles: " << cpu.sim_cycle()
+                    << " cumulative IPC: " << std::ceil(cpu.sim_instr()) / std::ceil(cpu.sim_cycle());
           std::cout << " (Simulation time: " << elapsed_hour << " hr " << elapsed_minute << " min " << elapsed_second << " sec) " << std::endl;
         }
       }

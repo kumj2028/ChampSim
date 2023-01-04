@@ -1,7 +1,24 @@
+/*
+ *    Copyright 2023 The ChampSim Contributors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #ifndef DRAM_H
 #define DRAM_H
 
 #include <array>
+#include <cassert>
 #include <cmath>
 #include <limits>
 
@@ -11,6 +28,7 @@
 #include "util.h"
 
 struct dram_stats {
+  std::string name{};
   uint64_t dbus_cycle_congested = 0, dbus_count_congested = 0;
 
   unsigned WQ_ROW_BUFFER_HIT = 0, WQ_ROW_BUFFER_MISS = 0, RQ_ROW_BUFFER_HIT = 0, RQ_ROW_BUFFER_MISS = 0, WQ_FULL = 0;
@@ -38,7 +56,7 @@ struct DRAM_CHANNEL {
   uint64_t dbus_cycle_available = 0;
 
   using stats_type = dram_stats;
-  std::vector<stats_type> roi_stats, sim_stats;
+  std::vector<stats_type> roi_stats{}, sim_stats{};
 
   void check_collision();
 };
@@ -46,7 +64,7 @@ struct DRAM_CHANNEL {
 class MEMORY_CONTROLLER : public champsim::operable, public MemoryRequestConsumer
 {
   // Latencies
-  const uint64_t tRP, tRCD, tCAS, DRAM_DBUS_TURN_AROUND_TIME, DRAM_DBUS_RETURN_TIME = std::ceil(1.0 * BLOCK_SIZE / DRAM_CHANNEL_WIDTH);
+  const uint64_t tRP, tRCD, tCAS, DRAM_DBUS_TURN_AROUND_TIME, DRAM_DBUS_RETURN_TIME;
 
   // these values control when to send out a burst of writes
   constexpr static std::size_t DRAM_WRITE_HIGH_WM = ((DRAM_WQ_SIZE * 7) >> 3);         // 7/8th
@@ -58,19 +76,20 @@ public:
 
   MEMORY_CONTROLLER(double freq_scale, int io_freq, double t_rp, double t_rcd, double t_cas, double turnaround);
 
-  void initialize() override;
-  void operate() override;
-  void begin_phase() override;
-  void end_phase(unsigned cpu) override;
-  void print_roi_stats() override;
-  void print_phase_stats() override;
+  void initialize() override final;
+  void operate() override final;
+  void begin_phase() override final;
+  void end_phase(unsigned cpu) override final;
 
-  bool add_rq(const PACKET& packet) override;
-  bool add_wq(const PACKET& packet) override;
-  bool add_pq(const PACKET& packet) override;
+  bool add_rq(const PACKET& packet) override final;
+  bool add_wq(const PACKET& packet) override final;
+  bool add_pq(const PACKET& packet) override final;
+  bool add_ptwq(const PACKET&) override final { assert(0); }
 
-  uint32_t get_occupancy(uint8_t queue_type, uint64_t address) override;
-  uint32_t get_size(uint8_t queue_type, uint64_t address) override;
+  std::size_t get_occupancy(uint8_t queue_type, uint64_t address) override final;
+  std::size_t get_size(uint8_t queue_type, uint64_t address) override final;
+
+  std::size_t size() const;
 
   uint32_t dram_get_channel(uint64_t address);
   uint32_t dram_get_rank(uint64_t address);

@@ -1,25 +1,41 @@
+/*
+ *    Copyright 2023 The ChampSim Contributors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #include "dram_controller.h"
 
 #include <algorithm>
-#include <iomanip>
-#include <numeric>
+#include <cfenv>
+#include <cmath>
 
 #include "champsim_constants.h"
 #include "instruction.h"
 #include "util.h"
 
-MEMORY_CONTROLLER::MEMORY_CONTROLLER(double freq_scale, int io_freq, double t_rp, double t_rcd, double t_cas, double turnaround)
-    : champsim::operable(freq_scale), tRP(std::ceil(t_rp * io_freq / 1000)), tRCD(std::ceil(t_rcd * io_freq / 1000)), tCAS(std::ceil(t_cas * io_freq / 1000)),
-      DRAM_DBUS_TURN_AROUND_TIME(std::ceil(turnaround * io_freq / 1000))
+uint64_t cycles(double time, int io_freq)
 {
+  std::fesetround(FE_UPWARD);
+  auto result = std::lrint(time * io_freq);
+  return result < 0 ? 0 : static_cast<uint64_t>(result);
 }
 
-struct is_unscheduled {
-  bool operator()(const PACKET& lhs) { return !lhs.scheduled; }
-};
-
-struct next_schedule : public invalid_is_maximal<PACKET, min_event_cycle<PACKET>, PACKET, is_unscheduled, is_unscheduled> {
-};
+MEMORY_CONTROLLER::MEMORY_CONTROLLER(double freq_scale, int io_freq, double t_rp, double t_rcd, double t_cas, double turnaround)
+    : champsim::operable(freq_scale), tRP(cycles(t_rp / 1000, io_freq)), tRCD(cycles(t_rcd / 1000, io_freq)), tCAS(cycles(t_cas / 1000, io_freq)),
+      DRAM_DBUS_TURN_AROUND_TIME(cycles(turnaround / 1000, io_freq)), DRAM_DBUS_RETURN_TIME(cycles(std::ceil(BLOCK_SIZE) / std::ceil(DRAM_CHANNEL_WIDTH), 1))
+{
+}
 
 void MEMORY_CONTROLLER::operate()
 {
@@ -51,8 +67,8 @@ void MEMORY_CONTROLLER::operate()
     }
 
     // Check queue occupancy
-    std::size_t wq_occu = std::count_if(std::begin(channel.WQ), std::end(channel.WQ), is_valid<PACKET>());
-    std::size_t rq_occu = std::count_if(std::begin(channel.RQ), std::end(channel.RQ), is_valid<PACKET>());
+    auto wq_occu = static_cast<std::size_t>(std::count_if(std::begin(channel.WQ), std::end(channel.WQ), [](const auto& x) { return x.address != 0; }));
+    auto rq_occu = static_cast<std::size_t>(std::count_if(std::begin(channel.RQ), std::end(channel.RQ), [](const auto& x) { return x.address != 0; }));
 
     // Change modes if the queues are unbalanced
     if ((!channel.write_mode && (wq_occu >= DRAM_WRITE_HIGH_WM || (rq_occu == 0 && wq_occu > 0)))
@@ -83,7 +99,8 @@ void MEMORY_CONTROLLER::operate()
     }
 
     // Look for requests to put on the bus
-    auto iter_next_process = std::min_element(std::begin(channel.bank_request), std::end(channel.bank_request), min_event_cycle<DRAM_CHANNEL::BANK_REQUEST>());
+    auto iter_next_process = std::min_element(std::begin(channel.bank_request), std::end(channel.bank_request),
+                                              [](const auto& lhs, const auto& rhs) { return !rhs.valid || (lhs.valid && lhs.event_cycle < rhs.event_cycle); });
     if (iter_next_process->valid && iter_next_process->event_cycle <= current_cycle) {
       if (channel.active_request == std::end(channel.bank_request) && channel.dbus_cycle_available <= current_cycle) {
         // Bus is available
@@ -111,11 +128,14 @@ void MEMORY_CONTROLLER::operate()
     }
 
     // Look for queued packets that have not been scheduled
+    auto next_schedule = [](const auto& lhs, const auto& rhs) {
+      return !(rhs.address != 0 && !rhs.scheduled) || ((lhs.address != 0 && !lhs.scheduled) && lhs.event_cycle < rhs.event_cycle);
+    };
     std::vector<PACKET>::iterator iter_next_schedule;
     if (channel.write_mode)
-      iter_next_schedule = std::min_element(std::begin(channel.WQ), std::end(channel.WQ), next_schedule());
+      iter_next_schedule = std::min_element(std::begin(channel.WQ), std::end(channel.WQ), next_schedule);
     else
-      iter_next_schedule = std::min_element(std::begin(channel.RQ), std::end(channel.RQ), next_schedule());
+      iter_next_schedule = std::min_element(std::begin(channel.RQ), std::end(channel.RQ), next_schedule);
 
     if (is_valid<PACKET>()(*iter_next_schedule) && iter_next_schedule->event_cycle <= current_cycle) {
       uint32_t op_rank = dram_get_rank(iter_next_schedule->address), op_bank = dram_get_bank(iter_next_schedule->address),
@@ -149,51 +169,17 @@ void MEMORY_CONTROLLER::initialize()
 
 void MEMORY_CONTROLLER::begin_phase()
 {
-  for (auto& chan : channels)
+  std::size_t chan_idx = 0;
+  for (auto& chan : channels) {
     chan.sim_stats.emplace_back();
+    chan.sim_stats.back().name = "Channel " + std::to_string(chan_idx++);
+  }
 }
 
-void MEMORY_CONTROLLER::end_phase(unsigned cpu)
+void MEMORY_CONTROLLER::end_phase(unsigned)
 {
   for (auto& chan : channels)
     chan.roi_stats.push_back(chan.sim_stats.back());
-}
-
-void MEMORY_CONTROLLER::print_roi_stats() {}
-
-void MEMORY_CONTROLLER::print_phase_stats()
-{
-  std::cout << std::endl;
-  std::cout << "DRAM Statistics" << std::endl;
-  auto i = 0;
-  for (auto chan : channels) {
-    std::cout << " CHANNEL " << i++ << std::endl;
-    std::cout << " RQ ROW_BUFFER_HIT: " << std::setw(10) << chan.sim_stats.back().RQ_ROW_BUFFER_HIT << std::endl;
-    std::cout << "  ROW_BUFFER_MISS: " << std::setw(10) << chan.sim_stats.back().RQ_ROW_BUFFER_MISS << std::endl;
-    std::cout << " AVG DBUS CONGESTED CYCLE: ";
-    if (chan.sim_stats.back().dbus_count_congested > 0)
-      std::cout << std::setw(10) << (1.0 * chan.sim_stats.back().dbus_cycle_congested) / chan.sim_stats.back().dbus_count_congested;
-    else
-      std::cout << "-";
-    std::cout << std::endl;
-    std::cout << " WQ ROW_BUFFER_HIT: " << std::setw(10) << chan.sim_stats.back().WQ_ROW_BUFFER_HIT << std::endl;
-    std::cout << "  ROW_BUFFER_MISS: " << std::setw(10) << chan.sim_stats.back().WQ_ROW_BUFFER_MISS;
-    std::cout << "  FULL: " << std::setw(10) << chan.sim_stats.back().WQ_FULL << std::endl;
-    std::cout << std::endl;
-  }
-
-  uint64_t total_congested_cycle = 0;
-  for (auto chan : channels)
-    total_congested_cycle += chan.sim_stats.back().dbus_cycle_congested;
-
-  uint64_t total_congested_count = 0;
-  for (auto chan : channels)
-    total_congested_count += chan.sim_stats.back().dbus_count_congested;
-
-  if (total_congested_count)
-    std::cout << " AVG_CONGESTED_CYCLE: " << ((double)total_congested_cycle / total_congested_count) << std::endl;
-  else
-    std::cout << " AVG_CONGESTED_CYCLE: -" << std::endl;
 }
 
 void DRAM_CHANNEL::check_collision()
@@ -203,7 +189,7 @@ void DRAM_CHANNEL::check_collision()
       eq_addr<PACKET> checker{wq_it->address, LOG2_BLOCK_SIZE};
       if (auto found = std::find_if(std::begin(WQ), wq_it, checker); found != wq_it) { // Forward check
         *wq_it = {};
-      } else if (auto found = std::find_if(std::next(wq_it), std::end(WQ), checker); found != std::end(WQ)) { // Backward check
+      } else if (found = std::find_if(std::next(wq_it), std::end(WQ), checker); found != std::end(WQ)) { // Backward check
         *wq_it = {};
       } else {
         wq_it->forward_checked = true;
@@ -225,17 +211,17 @@ void DRAM_CHANNEL::check_collision()
         auto ret_copy = std::move(found->to_return);
 
         std::set_union(std::begin(instr_copy), std::end(instr_copy), std::begin(rq_it->instr_depend_on_me), std::end(rq_it->instr_depend_on_me),
-                       std::back_inserter(found->instr_depend_on_me), [](ooo_model_instr& x, ooo_model_instr& y) { return x.instr_id < y.instr_id; });
+                       std::back_inserter(found->instr_depend_on_me), ooo_model_instr::program_order);
         std::set_union(std::begin(ret_copy), std::end(ret_copy), std::begin(rq_it->to_return), std::end(rq_it->to_return),
                        std::back_inserter(found->to_return));
 
         *rq_it = {};
-      } else if (auto found = std::find_if(std::next(rq_it), std::end(RQ), checker); found != std::end(RQ)) {
+      } else if (found = std::find_if(std::next(rq_it), std::end(RQ), checker); found != std::end(RQ)) {
         auto instr_copy = std::move(found->instr_depend_on_me);
         auto ret_copy = std::move(found->to_return);
 
         std::set_union(std::begin(instr_copy), std::end(instr_copy), std::begin(rq_it->instr_depend_on_me), std::end(rq_it->instr_depend_on_me),
-                       std::back_inserter(found->instr_depend_on_me), [](ooo_model_instr& x, ooo_model_instr& y) { return x.instr_id < y.instr_id; });
+                       std::back_inserter(found->instr_depend_on_me), ooo_model_instr::program_order);
         std::set_union(std::begin(ret_copy), std::end(ret_copy), std::begin(rq_it->to_return), std::end(rq_it->to_return),
                        std::back_inserter(found->to_return));
 
@@ -290,47 +276,47 @@ bool MEMORY_CONTROLLER::add_pq(const PACKET& packet) { return add_rq(packet); }
 uint32_t MEMORY_CONTROLLER::dram_get_channel(uint64_t address)
 {
   int shift = LOG2_BLOCK_SIZE;
-  return (address >> shift) & bitmask(lg2(DRAM_CHANNELS));
+  return (address >> shift) & champsim::bitmask(champsim::lg2(DRAM_CHANNELS));
 }
 
 uint32_t MEMORY_CONTROLLER::dram_get_bank(uint64_t address)
 {
-  int shift = lg2(DRAM_CHANNELS) + LOG2_BLOCK_SIZE;
-  return (address >> shift) & bitmask(lg2(DRAM_BANKS));
+  int shift = champsim::lg2(DRAM_CHANNELS) + LOG2_BLOCK_SIZE;
+  return (address >> shift) & champsim::bitmask(champsim::lg2(DRAM_BANKS));
 }
 
 uint32_t MEMORY_CONTROLLER::dram_get_column(uint64_t address)
 {
-  int shift = lg2(DRAM_BANKS) + lg2(DRAM_CHANNELS) + LOG2_BLOCK_SIZE;
-  return (address >> shift) & bitmask(lg2(DRAM_COLUMNS));
+  int shift = champsim::lg2(DRAM_BANKS) + champsim::lg2(DRAM_CHANNELS) + LOG2_BLOCK_SIZE;
+  return (address >> shift) & champsim::bitmask(champsim::lg2(DRAM_COLUMNS));
 }
 
 uint32_t MEMORY_CONTROLLER::dram_get_rank(uint64_t address)
 {
-  int shift = lg2(DRAM_BANKS) + lg2(DRAM_COLUMNS) + lg2(DRAM_CHANNELS) + LOG2_BLOCK_SIZE;
-  return (address >> shift) & bitmask(lg2(DRAM_RANKS));
+  int shift = champsim::lg2(DRAM_BANKS) + champsim::lg2(DRAM_COLUMNS) + champsim::lg2(DRAM_CHANNELS) + LOG2_BLOCK_SIZE;
+  return (address >> shift) & champsim::bitmask(champsim::lg2(DRAM_RANKS));
 }
 
 uint32_t MEMORY_CONTROLLER::dram_get_row(uint64_t address)
 {
-  int shift = lg2(DRAM_RANKS) + lg2(DRAM_BANKS) + lg2(DRAM_COLUMNS) + lg2(DRAM_CHANNELS) + LOG2_BLOCK_SIZE;
-  return (address >> shift) & bitmask(lg2(DRAM_ROWS));
+  int shift = champsim::lg2(DRAM_RANKS) + champsim::lg2(DRAM_BANKS) + champsim::lg2(DRAM_COLUMNS) + champsim::lg2(DRAM_CHANNELS) + LOG2_BLOCK_SIZE;
+  return (address >> shift) & champsim::bitmask(champsim::lg2(DRAM_ROWS));
 }
 
-uint32_t MEMORY_CONTROLLER::get_occupancy(uint8_t queue_type, uint64_t address)
+std::size_t MEMORY_CONTROLLER::get_occupancy(uint8_t queue_type, uint64_t address)
 {
   uint32_t channel = dram_get_channel(address);
   if (queue_type == 1)
-    return std::count_if(std::begin(channels[channel].RQ), std::end(channels[channel].RQ), is_valid<PACKET>());
+    return static_cast<std::size_t>(std::count_if(std::begin(channels[channel].RQ), std::end(channels[channel].RQ), is_valid<PACKET>()));
   else if (queue_type == 2)
-    return std::count_if(std::begin(channels[channel].WQ), std::end(channels[channel].WQ), is_valid<PACKET>());
+    return static_cast<std::size_t>(std::count_if(std::begin(channels[channel].WQ), std::end(channels[channel].WQ), is_valid<PACKET>()));
   else if (queue_type == 3)
     return get_occupancy(1, address);
 
   return 0;
 }
 
-uint32_t MEMORY_CONTROLLER::get_size(uint8_t queue_type, uint64_t address)
+std::size_t MEMORY_CONTROLLER::get_size(uint8_t queue_type, uint64_t address)
 {
   uint32_t channel = dram_get_channel(address);
   if (queue_type == 1)
@@ -342,3 +328,5 @@ uint32_t MEMORY_CONTROLLER::get_size(uint8_t queue_type, uint64_t address)
 
   return 0;
 }
+
+std::size_t MEMORY_CONTROLLER::size() const { return DRAM_CHANNELS * DRAM_RANKS * DRAM_BANKS * DRAM_ROWS * DRAM_COLUMNS * BLOCK_SIZE; }

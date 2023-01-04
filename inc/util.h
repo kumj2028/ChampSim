@@ -1,3 +1,19 @@
+/*
+ *    Copyright 2023 The ChampSim Contributors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #ifndef UTIL_H
 #define UTIL_H
 
@@ -6,11 +22,8 @@
 #include <optional>
 #include <vector>
 
-constexpr unsigned lg2(uint64_t n) { return n < 2 ? 0 : 1 + lg2(n / 2); }
-
-constexpr uint64_t bitmask(std::size_t begin, std::size_t end = 0) { return ((1ull << (begin - end)) - 1) << end; }
-
-constexpr uint64_t splice_bits(uint64_t upper, uint64_t lower, std::size_t bits) { return (upper & ~bitmask(bits)) | (lower & bitmask(bits)); }
+#include "msl/bits.h"
+#include "msl/lru_table.h"
 
 template <typename T>
 struct is_valid {
@@ -27,132 +40,41 @@ struct is_valid<std::optional<T>> {
 template <typename T>
 struct eq_addr {
   using argument_type = T;
-  const decltype(argument_type::address) val;
+  const decltype(argument_type::address) match_val;
   const std::size_t shamt = 0;
 
-  explicit eq_addr(decltype(argument_type::address) val) : val(val) {}
-  eq_addr(decltype(argument_type::address) val, std::size_t shamt) : val(val), shamt(shamt) {}
+  explicit eq_addr(decltype(argument_type::address) val) : match_val(val) {}
+  eq_addr(decltype(argument_type::address) val, std::size_t shift_bits) : match_val(val), shamt(shift_bits) {}
 
   bool operator()(const argument_type& test)
   {
     is_valid<argument_type> validtest;
-    return validtest(test) && (test.address >> shamt) == (val >> shamt);
-  }
-};
-
-template <typename T, typename BIN, typename U = T, typename UN_T = is_valid<T>, typename UN_U = is_valid<U>>
-struct invalid_is_minimal {
-  bool operator()(const T& lhs, const U& rhs)
-  {
-    UN_T lhs_unary;
-    UN_U rhs_unary;
-    BIN cmp;
-
-    return !lhs_unary(lhs) || (rhs_unary(rhs) && cmp(lhs, rhs));
-  }
-};
-
-template <typename T, typename BIN, typename U = T, typename UN_T = is_valid<T>, typename UN_U = is_valid<U>>
-struct invalid_is_maximal {
-  bool operator()(const T& lhs, const U& rhs)
-  {
-    UN_T lhs_unary;
-    UN_U rhs_unary;
-    BIN cmp;
-
-    return !rhs_unary(rhs) || (lhs_unary(lhs) && cmp(lhs, rhs));
-  }
-};
-
-template <typename T, typename U = T>
-struct cmp_event_cycle {
-  bool operator()(const T& lhs, const U& rhs) { return lhs.event_cycle < rhs.event_cycle; }
-};
-
-template <typename T>
-struct min_event_cycle : invalid_is_maximal<T, cmp_event_cycle<T>> {
-};
-
-template <typename T, typename U = T>
-struct ord_event_cycle {
-  using first_argument_type = T;
-  using second_argument_type = U;
-  bool operator()(const first_argument_type& lhs, const second_argument_type& rhs)
-  {
-    is_valid<first_argument_type> first_validtest;
-    is_valid<second_argument_type> second_validtest;
-    return !second_validtest(rhs) || (first_validtest(lhs) && lhs.event_cycle < rhs.event_cycle);
+    return validtest(test) && (test.address >> shamt) == (match_val >> shamt);
   }
 };
 
 namespace champsim
 {
+using msl::bitmask;
+using msl::lg2;
+using msl::lru_table;
+using msl::splice_bits;
 
-template <typename T>
-class simple_lru_table
+template <typename It>
+std::pair<It, It> get_span(It begin, It end, typename std::iterator_traits<It>::difference_type sz)
 {
-  struct block_t {
-    uint64_t address;
-    uint64_t last_used = 0;
-    T data;
-  };
+  assert(std::distance(begin, end) >= 0);
+  assert(sz >= 0);
+  auto distance = std::min(std::distance(begin, end), sz);
+  return {begin, std::next(begin, distance)};
+}
 
-  const std::size_t NUM_SET, NUM_WAY, shamt;
-  uint64_t access_count = 0;
-  std::vector<block_t> block{NUM_SET * NUM_WAY};
-
-  auto get_set_span(uint64_t index)
-  {
-    auto set_idx = (index >> shamt) & bitmask(lg2(NUM_SET));
-    auto set_begin = std::next(std::begin(block), set_idx * NUM_WAY);
-    return std::pair{set_begin, std::next(set_begin, NUM_WAY)};
-  }
-
-  auto match_func(uint64_t index)
-  {
-    return [index, shamt = this->shamt](auto x) {
-      return x.last_used > 0 && (x.address >> shamt) == (index >> shamt);
-    };
-  }
-
-public:
-  simple_lru_table(std::size_t sets, std::size_t ways, std::size_t shamt) : NUM_SET(sets), NUM_WAY(ways), shamt(shamt) {}
-
-  std::optional<T> check_hit(uint64_t index)
-  {
-    auto [set_begin, set_end] = get_set_span(index);
-    auto hit_block = std::find_if(set_begin, set_end, match_func(index));
-
-    if (hit_block == set_end)
-      return std::nullopt;
-
-    hit_block->last_used = ++access_count;
-    return hit_block->data;
-  }
-
-  void fill_cache(uint64_t index, T data)
-  {
-    auto [set_begin, set_end] = get_set_span(index);
-    auto fill_block = std::find_if(set_begin, set_end, match_func(index));
-
-    if (fill_block == set_end)
-      fill_block = std::min_element(set_begin, set_end, [](auto x, auto y) { return x.last_used < y.last_used; });
-
-    *fill_block = {index, ++access_count, data};
-  }
-
-  std::optional<T> invalidate(uint64_t index)
-  {
-    auto [set_begin, set_end] = get_set_span(index);
-    auto hit_block = std::find_if(set_begin, set_end, match_func(index));
-
-    if (hit_block == set_end)
-      return std::nullopt;
-
-    auto oldval = std::exchange(*hit_block, {0, 0, {}});
-    return oldval.data;
-  }
-};
+template <typename It, typename F>
+std::pair<It, It> get_span_p(It begin, It end, typename std::iterator_traits<It>::difference_type sz, F&& func)
+{
+  auto [span_begin, span_end] = get_span(begin, end, sz);
+  return {span_begin, std::find_if_not(span_begin, span_end, std::forward<F>(func))};
+}
 
 } // namespace champsim
 

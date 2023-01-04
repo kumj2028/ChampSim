@@ -1,9 +1,25 @@
+/*
+ *    Copyright 2023 The ChampSim Contributors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #include "tracereader.h"
 
 #include <algorithm>
 #include <cstring>
 
-#ifdef __GNUG__
+#if defined(__GNUG__) && !defined(__APPLE__)
 #include <iostream>
 #endif
 
@@ -37,24 +53,23 @@ void tracereader::refresh_buffer()
   std::size_t bytes_read;
 
   // Read from trace file
-#ifdef __GNUG__
+#if defined(__GNUG__) && !defined(__APPLE__)
   std::istream trace_file{&filebuf};
   trace_file.read(std::data(raw_buf), std::size(raw_buf));
-  bytes_read = trace_file.gcount();
+  bytes_read = static_cast<std::size_t>(trace_file.gcount());
   eof_ = trace_file.eof();
 #else
   bytes_read = fread(std::data(raw_buf), sizeof(char), std::size(raw_buf), fp);
-  eof_ = (bytes_left > 0);
+  eof_ = (bytes_read > 0);
 #endif
 
   // Transform bytes into trace format instructions
   std::memcpy(std::data(trace_read_buf), std::data(raw_buf), bytes_read);
 
   // Inflate trace format into core model instructions
-  auto cpu = this->cpu;
   auto begin = std::begin(trace_read_buf);
   auto end = std::next(begin, bytes_read / sizeof(T));
-  std::transform(begin, end, std::back_inserter(instr_buffer), [cpu](T t) { return ooo_model_instr{cpu, t}; });
+  std::transform(begin, end, std::back_inserter(instr_buffer), [cpu = this->cpu](T t) { return ooo_model_instr{cpu, t}; });
 
   // Set branch targets
   for (auto it = std::next(std::begin(instr_buffer)); it != std::end(instr_buffer); ++it)
@@ -78,7 +93,7 @@ class bulk_tracereader : public tracereader
 {
 public:
   using tracereader::tracereader;
-  ooo_model_instr operator()() { return impl_get<T>(); }
+  ooo_model_instr operator()() override final { return impl_get<T>(); }
 };
 
 std::unique_ptr<tracereader> get_tracereader(std::string_view fname, uint8_t cpu, bool is_cloudsuite)

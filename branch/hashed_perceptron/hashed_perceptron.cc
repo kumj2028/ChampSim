@@ -1,11 +1,9 @@
 /*
 
 This code implements a hashed perceptron branch predictor using geometric
-history lengths and dynamic threshold setting.
+history lengths and dynamic threshold setting.  It was written by Daniel
+A. Jiménez in March 2019.
 
-It was written by Daniel A. Jiménez in March 2019. To the extent allowed by
-law, the author abdicates all rights to this work and places it in the public
-domain.
 
 The original perceptron branch predictor is from Jiménez and Lin, "Dynamic
 Branch Prediction with Perceptrons," HPCA 2001.
@@ -93,7 +91,7 @@ unsigned int ghist_words[NUM_CPUS][NGHIST_WORDS];
 
 // remember the indices into the tables from prediction to update
 
-unsigned int indices[NUM_CPUS][NTABLES];
+uint64_t indices[NUM_CPUS][NTABLES];
 
 // initialize theta to something reasonable,
 int theta[NUM_CPUS],
@@ -116,11 +114,11 @@ void O3_CPU::initialize_branch_predictor()
 
   // make a reasonable theta
 
-  for (int i = 0; i < NUM_CPUS; i++)
+  for (unsigned i = 0; i < NUM_CPUS; i++)
     theta[i] = 10;
 }
 
-uint8_t O3_CPU::predict_branch(uint64_t pc, uint64_t predicted_target, uint8_t always_taken, uint8_t branch_type)
+uint8_t O3_CPU::predict_branch(uint64_t pc)
 {
 
   // initialize perceptron sum
@@ -138,7 +136,7 @@ uint8_t O3_CPU::predict_branch(uint64_t pc, uint64_t predicted_target, uint8_t a
     // hash global history bits 0..n-1 into x by XORing the words from the
     // ghist_words array
 
-    unsigned int x = 0;
+    uint64_t x = 0;
 
     // most of the words are 12 bits long
 

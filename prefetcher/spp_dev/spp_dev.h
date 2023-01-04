@@ -3,7 +3,10 @@
 
 #include <cstdint>
 #include <iostream>
+#include <vector>
 
+namespace spp
+{
 // SPP functional knobs
 constexpr bool LOOKAHEAD_ON = true;
 constexpr bool FILTER_ON = true;
@@ -83,8 +86,8 @@ public:
     }
   }
 
-  void update_pattern(uint32_t last_sig, int curr_delta), read_pattern(uint32_t curr_sig, int*prefetch_delta, uint32_t*confidence_q, uint32_t&lookahead_way,
-                                                                       uint32_t&lookahead_conf, uint32_t&pf_q_tail, uint32_t&depth);
+  void update_pattern(uint32_t last_sig, int curr_delta), read_pattern(uint32_t curr_sig, std::vector<int>&prefetch_delta, std::vector<uint32_t>&confidence_q,
+                                                                       uint32_t&lookahead_way, uint32_t&lookahead_conf, uint32_t&pf_q_tail, uint32_t&depth);
 };
 
 class PREFETCH_FILTER
@@ -110,8 +113,8 @@ class GLOBAL_REGISTER
 {
 public:
   // Global counters to calculate global prefetching accuracy
-  uint64_t pf_useful, pf_issued,
-      global_accuracy; // Alpha value in Section III. Equation 3
+  uint32_t pf_useful, pf_issued;
+  uint32_t global_accuracy; // Alpha value in Section III. Equation 3
 
   // Global History Register (GHR) entries
   uint8_t valid[MAX_GHR_ENTRY];
@@ -136,5 +139,6 @@ public:
   void update_entry(uint32_t pf_sig, uint32_t pf_confidence, uint32_t pf_offset, int pf_delta);
   uint32_t check_entry(uint32_t page_offset);
 };
+} // namespace spp
 
 #endif

@@ -1,3 +1,19 @@
+/*
+ *    Copyright 2023 The ChampSim Contributors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #include "cache.h"
 #include "champsim.h"
 #include "instruction.h"
@@ -17,6 +33,13 @@ bool do_collision_for(Iter begin, Iter end, PACKET& packet, unsigned shamt, F&& 
 {
   auto found = std::find_if(begin, end, eq_addr<PACKET>(packet.address, shamt));
   if (found != end) {
+    if (!packet.is_translated || !(*found).is_translated) {
+      // We make sure that both merge packet address have been translated. If
+      // not this can happen: package with address virtual and physical X
+      // (not translated) is inserted, package with physical address
+      // (already translated) X.
+      return false;
+    }
     func(packet, *found);
     return true;
   }
@@ -28,11 +51,16 @@ template <typename Iter>
 bool do_collision_for_merge(Iter begin, Iter end, PACKET& packet, unsigned shamt)
 {
   return do_collision_for(begin, end, packet, shamt, [](PACKET& source, PACKET& destination) {
+    if (source.fill_this_level || destination.fill_this_level) {
+      // If one of the package will fill this level the resulted package should
+      // also fill this level
+      destination.fill_this_level = true;
+    }
     auto instr_copy = std::move(destination.instr_depend_on_me);
     auto ret_copy = std::move(destination.to_return);
 
     std::set_union(std::begin(instr_copy), std::end(instr_copy), std::begin(source.instr_depend_on_me), std::end(source.instr_depend_on_me),
-                   std::back_inserter(destination.instr_depend_on_me), [](ooo_model_instr& x, ooo_model_instr& y) { return x.instr_id < y.instr_id; });
+                   std::back_inserter(destination.instr_depend_on_me), ooo_model_instr::program_order);
     std::set_union(std::begin(ret_copy), std::end(ret_copy), std::begin(source.to_return), std::end(source.to_return),
                    std::back_inserter(destination.to_return));
   });
@@ -43,6 +71,7 @@ bool do_collision_for_return(Iter begin, Iter end, PACKET& packet, unsigned sham
 {
   return do_collision_for(begin, end, packet, shamt, [](PACKET& source, PACKET& destination) {
     source.data = destination.data;
+    source.pf_metadata = destination.pf_metadata;
     for (auto ret : source.to_return)
       ret->return_data(source);
   });
@@ -50,8 +79,8 @@ bool do_collision_for_return(Iter begin, Iter end, PACKET& packet, unsigned sham
 
 void CACHE::NonTranslatingQueues::check_collision()
 {
-  std::size_t write_shamt = match_offset_bits ? 0 : OFFSET_BITS;
-  std::size_t read_shamt = OFFSET_BITS;
+  auto write_shamt = match_offset_bits ? 0 : OFFSET_BITS;
+  auto read_shamt = OFFSET_BITS;
 
   // Check WQ for duplicates, merging if they are found
   for (auto wq_it = std::find_if(std::begin(WQ), std::end(WQ), std::not_fn(&PACKET::forward_checked)); wq_it != std::end(WQ);) {
@@ -158,7 +187,6 @@ bool CACHE::NonTranslatingQueues::do_add_queue(R& queue, std::size_t queue_size,
   auto fwd_pkt = packet;
   fwd_pkt.forward_checked = false;
   fwd_pkt.translate_issued = false;
-  fwd_pkt.prefetch_from_this = false;
   fwd_pkt.event_cycle = current_cycle + (warmup ? 0 : HIT_LATENCY);
   queue.insert(ins_loc, fwd_pkt);
 
@@ -175,6 +203,7 @@ bool CACHE::NonTranslatingQueues::add_rq(const PACKET& packet)
 
   auto fwd_pkt = packet;
   fwd_pkt.fill_this_level = true;
+  fwd_pkt.is_translated = (fwd_pkt.v_address != fwd_pkt.address) && fwd_pkt.address != 0;
   auto result = do_add_queue(RQ, RQ_SIZE, fwd_pkt);
 
   if (result)
@@ -191,6 +220,7 @@ bool CACHE::NonTranslatingQueues::add_wq(const PACKET& packet)
 
   auto fwd_pkt = packet;
   fwd_pkt.fill_this_level = true;
+  fwd_pkt.is_translated = (fwd_pkt.v_address != fwd_pkt.address) && fwd_pkt.address != 0;
   auto result = do_add_queue(WQ, WQ_SIZE, fwd_pkt);
 
   if (result)
@@ -204,7 +234,10 @@ bool CACHE::NonTranslatingQueues::add_wq(const PACKET& packet)
 bool CACHE::NonTranslatingQueues::add_pq(const PACKET& packet)
 {
   sim_stats.back().PQ_ACCESS++;
-  auto result = do_add_queue(PQ, PQ_SIZE, packet);
+
+  auto fwd_pkt = packet;
+  fwd_pkt.is_translated = (fwd_pkt.v_address != fwd_pkt.address) && fwd_pkt.address != 0;
+  auto result = do_add_queue(PQ, PQ_SIZE, fwd_pkt);
   if (result)
     sim_stats.back().PQ_TO_CACHE++;
   else
@@ -213,26 +246,34 @@ bool CACHE::NonTranslatingQueues::add_pq(const PACKET& packet)
   return result;
 }
 
-bool CACHE::NonTranslatingQueues::wq_has_ready() const { return WQ.front().event_cycle <= current_cycle; }
-
-bool CACHE::NonTranslatingQueues::rq_has_ready() const { return RQ.front().event_cycle <= current_cycle; }
-
-bool CACHE::NonTranslatingQueues::pq_has_ready() const { return PQ.front().event_cycle <= current_cycle; }
-
-bool CACHE::TranslatingQueues::wq_has_ready() const
+bool CACHE::NonTranslatingQueues::add_ptwq(const PACKET& packet)
 {
-  return NonTranslatingQueues::wq_has_ready() && WQ.front().address != 0 && WQ.front().address != WQ.front().v_address;
+  sim_stats.back().PTWQ_ACCESS++;
+
+  auto fwd_pkt = packet;
+  fwd_pkt.fill_this_level = true;
+  fwd_pkt.is_translated = true;
+  auto result = do_add_queue(PTWQ, PTWQ_SIZE, fwd_pkt);
+
+  if (result)
+    sim_stats.back().PTWQ_TO_CACHE++;
+  else
+    sim_stats.back().PTWQ_FULL++;
+
+  return result;
 }
 
-bool CACHE::TranslatingQueues::rq_has_ready() const
-{
-  return NonTranslatingQueues::rq_has_ready() && RQ.front().address != 0 && RQ.front().address != RQ.front().v_address;
-}
+bool CACHE::NonTranslatingQueues::is_ready(const PACKET& pkt) const { return pkt.event_cycle <= current_cycle; }
 
-bool CACHE::TranslatingQueues::pq_has_ready() const
-{
-  return NonTranslatingQueues::pq_has_ready() && PQ.front().address != 0 && PQ.front().address != PQ.front().v_address;
-}
+bool CACHE::TranslatingQueues::is_ready(const PACKET& pkt) const { return NonTranslatingQueues::is_ready(pkt) && pkt.address != 0 && pkt.is_translated; }
+
+bool CACHE::NonTranslatingQueues::wq_has_ready() const { return is_ready(WQ.front()); }
+
+bool CACHE::NonTranslatingQueues::rq_has_ready() const { return is_ready(RQ.front()); }
+
+bool CACHE::NonTranslatingQueues::pq_has_ready() const { return is_ready(PQ.front()); }
+
+bool CACHE::NonTranslatingQueues::ptwq_has_ready() const { return is_ready(PTWQ.front()); }
 
 void CACHE::TranslatingQueues::return_data(const PACKET& packet)
 {
@@ -246,22 +287,25 @@ void CACHE::TranslatingQueues::return_data(const PACKET& packet)
   // Find all packets that match the page of the returned packet
   for (auto& wq_entry : WQ) {
     if ((wq_entry.v_address >> LOG2_PAGE_SIZE) == (packet.v_address >> LOG2_PAGE_SIZE)) {
-      wq_entry.address = splice_bits(packet.data, wq_entry.v_address, LOG2_PAGE_SIZE); // translated address
+      wq_entry.address = champsim::splice_bits(packet.data, wq_entry.v_address, LOG2_PAGE_SIZE); // translated address
       wq_entry.event_cycle = std::min(wq_entry.event_cycle, current_cycle + (warmup ? 0 : HIT_LATENCY));
+      wq_entry.is_translated = true; // This entry is now translated
     }
   }
 
   for (auto& rq_entry : RQ) {
     if ((rq_entry.v_address >> LOG2_PAGE_SIZE) == (packet.v_address >> LOG2_PAGE_SIZE)) {
-      rq_entry.address = splice_bits(packet.data, rq_entry.v_address, LOG2_PAGE_SIZE); // translated address
+      rq_entry.address = champsim::splice_bits(packet.data, rq_entry.v_address, LOG2_PAGE_SIZE); // translated address
       rq_entry.event_cycle = std::min(rq_entry.event_cycle, current_cycle + (warmup ? 0 : HIT_LATENCY));
+      rq_entry.is_translated = true; // This entry is now translated
     }
   }
 
   for (auto& pq_entry : PQ) {
     if ((pq_entry.v_address >> LOG2_PAGE_SIZE) == (packet.v_address >> LOG2_PAGE_SIZE)) {
-      pq_entry.address = splice_bits(packet.data, pq_entry.v_address, LOG2_PAGE_SIZE); // translated address
+      pq_entry.address = champsim::splice_bits(packet.data, pq_entry.v_address, LOG2_PAGE_SIZE); // translated address
       pq_entry.event_cycle = std::min(pq_entry.event_cycle, current_cycle + (warmup ? 0 : HIT_LATENCY));
+      pq_entry.is_translated = true; // This entry is now translated
     }
   }
 }
@@ -272,7 +316,7 @@ void CACHE::NonTranslatingQueues::begin_phase()
   sim_stats.emplace_back();
 }
 
-void CACHE::NonTranslatingQueues::end_phase(unsigned cpu)
+void CACHE::NonTranslatingQueues::end_phase(unsigned)
 {
   roi_stats.back().RQ_ACCESS = sim_stats.back().RQ_ACCESS;
   roi_stats.back().RQ_MERGED = sim_stats.back().RQ_MERGED;
