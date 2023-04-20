@@ -1,9 +1,17 @@
 Algorithm, Benchmark, IPC, Accuracy, MPKI
 bimodal, gcc, 2.18893, 0.995865, 0.8116
 bimodal, perl, 1.9339, 0.971272, 3.97542
+bimodal, soplex, 0.287601, 0.928403, 12.9765
+bimodal, povray, 1.28419, 0.927332, 10.5247
 gshare, gcc, 2.20866, 0.996729, 0.6419
 gshare, perl, 1.95874, 0.970698, 4.05482
+gshare, soplex, 0.287169, 0.928326, 12.9904
+gshare, povray, 1.33658, 0.941778, 8.4325
 hp, gcc, 2.22541, 0.997362, 0.51766
 hp, perl, 2.02928, 0.977213, 3.15328
+hp, soplex, 0.292012, 0.939681, 10.9323
+hp, povray, 1.41964, 0.95347, 6.73906
 perceptron, gcc, 2.21491, 0.996879, 0.61248
 perceptron, perl, 2.00043, 0.975622, 3.3734
+perceptron, soplex, 0.288693, 0.93015, 12.6598
+perceptron, povray, 1.36391, 0.946441, 7.75706
