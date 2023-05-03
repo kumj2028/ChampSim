@@ -102,8 +102,32 @@ The aim of this paper is to explore the various branch prediction models and com
 In this section, we will cover the various branch predictor models used in the simulation.
 
 \subsection{Bimodal Predictor} \label{ssec::bimodal}
-This model stores two bits in the branch target buffer (BTB) indicating whether this particular branch was taken or not taken the last two time. The bimodal branch predictor's accuracy will increase exponentially if the branch history size is increased. Most of the predictor's branches are taken or not taken and are not random. The main goal of this model is to distribute the branch behavior and predict which are the taken branches. The bimodal branch has a default size of a 2-bit counter which is organized in the low-order address-bit program counter section. When the branch is categorized as taken, the counter is increased. When the branch is categorized as not taken, then the counter is decreased. The counter value is limited and must be within the range of zero to three. This allows the branch predictor model to be categorized as taken or not taken using repeated values.
+This model was first proposed by James E. Smith as an improvement on the single-bit last-time predictor\cite{smith1981}. This is a local history predictor in the sense that the Program Counter (PC) is used to differentiate branches and their past outcomes. It stores two bits in the branch target buffer (BTB) indicating whether this particular branch was taken or not taken in the last two times encountered. These two bits encode a state machine with four states shown in Fig. 
+\ref{fig:bimodal}. 
+\begin{figure}
+    \centering
+    \begin{tikzpicture}[>=stealth]
+		\node[ell,align=center] (st) at (0,3) {Strongly\\ Taken\\11};
+        \node[ell,align=center] (wt) at (3,3) {Weakly\\ Taken\\10};
+        \node[ell,align=center] (snt) at (3,0) {Strongly\\ Not Taken\\00};
+        \node[ell,align=center] (wnt) at (0,0) {Weakly\\ Not Taken\\01};
 
+        \draw [->] (st) to [loop above, looseness=5]node[]{1} (st);
+        \draw [->] (st) to [bend left=20]node[above]{0} (wt);
+        \draw [->] (wt) to [bend left=20]node[above]{1} (st);
+        \draw [->] (wt) to [bend right=10]node[above]{0} (wnt);
+        \draw [->] (wnt) to [bend right=10]node[above]{1} (wt);
+        \draw [->] (wnt) to [bend left=20]node[above]{0} (snt);
+        \draw [->] (snt) to [bend left=20]node[above]{1} (wnt);
+        \draw [->] (snt) to [loop below, looseness=5]node[]{0} (snt);
+    \end{tikzpicture}
+    \caption{Bimodal Predictor}
+	\label{fig:bimodal}
+\end{figure}
+The \textit{Strongly Taken} and \textit{Weakly Taken} states will predict \textit{taken} for the current branch, while the \textit{Strongly Not Taken} and \textit{Weakly Not Taken} states will predict \textit{not taken}.
+
+\subsection{Gshare Predictor} \label{ssec:gshare}
+This model was first proposed by Scott McFarling as an improvement on the global history predictor\cite{mcfarling1993}. A normal global history predictor uses the single history from the Global History Register (GHR) to index into the Pattern History Table (PHT) in order to predict all branch outcomes regardless of the PC. Gshare XORs the PC with the GHR for indexing into the PHT, which adds some local context information for the predictor to take into account.
 
 \subsection{Perceptron Predictor} \label{ssec:perceptron}
 This model is a single-layer version of an artificial neural network that can identify and classify patterns, first applied to branch prediction by Jimenez and Lin\cite{jimenez2001dynamic}. In the model shown in Fig. \ref{fig:perceptron} are the input vector ($x$), the weight vector ($w$), and the output ($y$).
@@ -129,7 +153,7 @@ The inputs correspond to values taken from the global history register, with the
     y = w_o + \sum_{i=1}^{h}{x_iw_i}
     \label{eqn:1}
 \end{equation}
-\pagebreak
+
 The weights of the perceptron are trained using the algorithm below:
 \begin{lstlisting}
 if sgn(y) != t or abs(y) <= theta  then
@@ -141,7 +165,7 @@ end
 $t$ is 1 if the branch is actually taken or -1 if not. $\theta$ is the threshold to determine when training should stop. $w_i$ is incremented if $t$ and $x_i$ agree, and decremented if they disagree.
 
 \subsection{Hashed Perceptron Predictor} \label{ssec::hp}
-This predictor is based off of the perceptron branch predictor from the previous section(\ref{ssec:pp}) but with a few important changes. The first change is instead of a single table for the weights, multiple independently indexed tables of perceptron weights are used, introduced by Jimenez \cite{jimenez2003}.  The second is using the hash of the branch history rather than just the branch history for indexing in order to reduce the number of independent tables, contemporaneously by Seznec \cite{seznec2004}, Tarjan and Skadron\cite{skadron2004}, and Loh and Jimenez\cite{loh2005reducing}.  The third is instead of using a fixed history length, exponentially increasing history lengths are used for indexing, by Seznec\cite{seznec2004gehl}\cite{seznec2005analysis}. This idea is actually one of the key parts of the TAGE predictor described later. The last is dynamically adjust the $\theta$ value for the training, also by Seznec\cite{seznec2004gehl}\cite{seznec2005analysis}.
+This predictor is based off of the perceptron branch predictor from the previous section(\ref{ssec:perceptron}) but with a few important changes. The first change is instead of a single table for the weights, multiple independently indexed tables of perceptron weights are used, introduced by Jimenez \cite{jimenez2003}.  The second is using the hash of the branch history rather than just the branch history for indexing in order to reduce the number of independent tables, contemporaneously by Seznec \cite{seznec2004}, Tarjan and Skadron\cite{skadron2004}, and Loh and Jimenez\cite{loh2005reducing}.  The third is instead of using a fixed history length, exponentially increasing history lengths are used for indexing, by Seznec\cite{seznec2004gehl}\cite{seznec2005analysis}. This idea is actually one of the key parts of the TAGE predictor described later. The last is dynamically adjust the $\theta$ value for the training, also by Seznec\cite{seznec2004gehl}\cite{seznec2005analysis}.
 
 
 \bibliographystyle{plain}
