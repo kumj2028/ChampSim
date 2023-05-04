@@ -14,9 +14,11 @@
 \usepackage{tkz-euclide}
 \usepackage{svg}
 
-\usetikzlibrary{shapes,positioning}
+\usetikzlibrary{shapes,positioning,shapes.gates.logic}
 
 \tikzset{ell/.style={circle,draw,minimum height=0.2cm,minimum width=0.2cm,inner sep=0.15cm}}
+\tikzset{rec/.style={rectangle,draw,minimum height=0.5cm,minimum width=0.5cm,inner sep=0.2cm}}
+\tikzset{trp/.style={trapezium,draw,trapezium left angle=120, trapezium right angle=120, minimum height=0.5cm}}
 
 
 %New colors defined below
@@ -91,17 +93,17 @@ ugochukwu.onyeakazi@students.tamuk.edu}
 \begin{abstract}
 \end{abstract}
 
-\section{Introduction}
+\section{Introduction} \label{sec:introduction}
 Branch prediction is a crucial component in modern computer architecture to improve performance and energy efficiency. When executing a program, the processor encounters branches in the control flow, where it must decide which path to take based on a conditional statement. Incorrect branch predictions result in wasted computation cycles and negatively impact the overall performance of the system. To mitigate this issue, branch predictors are employed to predict the outcome of the conditional statements, and enable the processor to pre-fetch instructions from the predicted path, reducing the overhead of branching.
 
 Over the years, a variety of branch prediction models have been developed to improve the accuracy of predictions. These models range from static branch predictors that use heuristics to predict the outcome of branches, to more sophisticated dynamic branch predictors (all models tested in this paper are dynamic) that rely on past history to make predictions. Furthermore, the emergence of  machine learning and artificial intelligence has led to the development of more advanced branch prediction techniques.
 
 The aim of this paper is to explore the various branch prediction models and compare their performances. We will examine the underlying principles of each model, the algorithms used to make predictions and their implementations in a simulated processor. We will also discuss the challenges associated with branch prediction, such as the trade-off between prediction accuracy and hardware complexity.
 
-\section{Models}
+\section{Models} \label{sec:models}
 In this section, we will cover the various branch predictor models used in the simulation.
 
-\subsection{Bimodal Predictor} \label{ssec::bimodal}
+\subsection{Bimodal Predictor} \label{ssec:bimodal}
 This model was first proposed by James E. Smith as an improvement on the single-bit last-time predictor\cite{smith1981}. This is a local history predictor in the sense that the Program Counter (PC) is used to differentiate branches and their past outcomes. It stores two bits in the branch target buffer (BTB) indicating whether this particular branch was taken or not taken in the last two times encountered. These two bits encode a state machine with four states shown in Fig. 
 \ref{fig:bimodal}. 
 \begin{figure}
@@ -130,7 +132,7 @@ The \textit{Strongly Taken} and \textit{Weakly Taken} states will predict \texti
 This model was first proposed by Scott McFarling as an improvement on the global history predictor\cite{mcfarling1993}. A normal global history predictor uses the single history from the Global History Register (GHR) to index into the Pattern History Table (PHT) in order to predict all branch outcomes regardless of the PC. Gshare XORs the PC with the GHR for indexing into the PHT, which adds some local context information for the predictor to take into account.
 
 \subsection{Perceptron Predictor} \label{ssec:perceptron}
-This model is a single-layer version of an artificial neural network that can identify and classify patterns, first applied to branch prediction by Jimenez and Lin\cite{jimenez2001dynamic}. In the model shown in Fig. \ref{fig:perceptron} are the input vector ($x$), the weight vector ($w$), and the output ($y$).
+This model is a single-layer version of an artificial neural network that can identify and classify patterns, first applied to branch prediction by Daniel A. Jimen\'ez and Calvin Lin\cite{jimenez2001dynamic}. In the model shown in Fig. \ref{fig:perceptron} are the input vector ($x$), the weight vector ($w$), and the output ($y$).
 \begin{figure}
     \centering
     \begin{tikzpicture}[>=stealth]
@@ -164,8 +166,59 @@ end
 \end{lstlisting}
 $t$ is 1 if the branch is actually taken or -1 if not. $\theta$ is the threshold to determine when training should stop. $w_i$ is incremented if $t$ and $x_i$ agree, and decremented if they disagree.
 
-\subsection{Hashed Perceptron Predictor} \label{ssec::hp}
-This predictor is based off of the perceptron branch predictor from the previous section(\ref{ssec:perceptron}) but with a few important changes. The first change is instead of a single table for the weights, multiple independently indexed tables of perceptron weights are used, introduced by Jimenez \cite{jimenez2003}.  The second is using the hash of the branch history rather than just the branch history for indexing in order to reduce the number of independent tables, contemporaneously by Seznec \cite{seznec2004}, Tarjan and Skadron\cite{skadron2004}, and Loh and Jimenez\cite{loh2005reducing}.  The third is instead of using a fixed history length, exponentially increasing history lengths are used for indexing, by Seznec\cite{seznec2004gehl}\cite{seznec2005analysis}. This idea is actually one of the key parts of the TAGE predictor described later. The last is dynamically adjust the $\theta$ value for the training, also by Seznec\cite{seznec2004gehl}\cite{seznec2005analysis}.
+\subsection{Hashed Perceptron Predictor} \label{ssec:hp}
+This predictor is based off of the perceptron branch predictor from the previous section(\ref{ssec:perceptron}) but with a few important changes. The first change is instead of a single table for the weights, multiple independently indexed tables of perceptron weights are used, introduced by Jimen\'ez \cite{jimenez2003}.  The second is using the hash of the global history rather than just the global history for indexing in order to reduce the number of independent tables, contemporaneously by Seznec \cite{seznec2004}, Tarjan and Skadron\cite{skadron2004}, and Loh and Jimen\'ez\cite{loh2005reducing}.  The third is instead of using a fixed global history length, exponentially increasing global history lengths are used for indexing, by Seznec\cite{seznec2004gehl}\cite{seznec2005analysis}. This idea is actually one of the key parts of the TAGE predictor described in the next section(\ref{ssec:tage}). The last is to dynamically adjust the $\theta$ value for the training, also by Seznec\cite{seznec2004gehl}\cite{seznec2005analysis}.
+
+\subsection{TAGE Predictor} \label{ssec:tage}
+TAGE stands for TAgged GEometric history length branch predictor, and it was introduced by Andr\'e Seznec\cite{seznec2006case}. The first key idea, as mentioned earlier, is using exponentially increasing global history lengths for indexing into multiple tables, in this case PHTs while for the hashed perceptron it was the weights. The second is to intelligently allocate the PHT entries to different branches. Fig. \ref{fig:tage} shows a 3-component TAGE predictor, while the TAGE predictor evaluated in our simulations has 13 components.
+\begin{figure}
+    \centering
+    \begin{tikzpicture}[>=stealth]
+		\node[] (pc0) at (0,11) {PC};
+        \node[] (pc1) at (2,12) {PC};
+        \node[] (pc2) at (5,12) {PC};
+        \node[] (h1) at (3.5,12) {h[0:L(1)]};
+        \node[] (h2) at (6.5,12) {h[0:L(2)]};
+        \node[rec] (hash1) at (3, 11) {hash};
+        \node[rec] (hash2) at (6, 11) {hash};
+        \node[rec, rotate=90] (bp) at (0,9) {base predictor};
+        \node[rec, rotate=90, align=center] (p1) at (3,9) {\underline{predictor}\\\underline{ useful }\\tag};
+        \node[rec, rotate=90, align=center] (p2) at (6,9) {\underline{predictor}\\\underline{ useful }\\tag};
+        \node[rec] (eq1) at (3,7) {=};
+        \node[rec] (eq2) at (6,7) {=};
+        \node[trp] (t0) at (2,6) {};
+        \node[trp] (t1) at (5,5) {};
+        \node[] (out) at (5,4) {};
+
+        \draw [->] (pc0) to []node[]{} (bp);
+        \draw [->] (bp) to [bend right=40]node[]{} (t0);
+        \draw [->] (pc1) to []node[]{} (hash1);
+        \draw [->] (h1) to []node[]{} (hash1);
+        \draw [->] (hash1) to []node[]{} (p1);
+        \draw [->] (hash1) to [bend left=70]node[]{} (eq1);
+        \draw [->] (p1) to []node[]{} (eq1);
+        \draw [->] (p1) to [bend right=10]node[]{} (t0);
+        \draw [->] (eq1) to [bend left=50]node[]{} (t0);
+        \draw [->] (pc2) to []node[]{} (hash2);
+        \draw [->] (h2) to []node[]{} (hash2);
+        \draw [->] (hash2) to []node[]{} (p2);
+        \draw [->] (hash2) to [bend left=70]node[]{} (eq2);
+        \draw [->] (p2) to []node[]{} (eq2);
+        \draw [->] (p2) to [bend right=10]node[]{} (t1);
+        \draw [->] (eq2) to [bend left=50]node[]{} (t1);
+        \draw [->] (t0) to [bend right=20]node[]{} (t1);
+        \draw [->] (t1) to []node[]{} (out);
+
+    \end{tikzpicture}
+    \caption{3-Component TAGE Predictor}
+	\label{fig:tage}
+\end{figure}
+
+\subsection{L-TAGE Predictor} \label{ssec:ltage}
+This predictor is based off of the TAGE predictor from the previous section(\ref{ssec:tage}), but with the addition of a loop predictor. It was introduced by Seznec and won the 2nd Championship Branch Prediction competition\cite{seznec2004}. A loop predictor first predicts the limit on how many iterations the loop will execute. It keeps track of the number of times the loop as executed, and as long as this count is below the limit, it will predict taken. 
+
+\section{Methodology} \label{sec:methodology}
+The study conducts experiments using the ChampSim Simulator. Each predictor is implemented in the branch prediction unit of the simulator. The predictors are then tested on application benchmarks from Standard Performance Evaluation Corporation (SPEC) suite of benchmarks. The performance of each predictor is recorded and presented in the next section (\ref{sec:results}).
 
 
 \bibliographystyle{plain}
