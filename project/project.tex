@@ -117,13 +117,13 @@ As one can see, going from 60\% accuracy to 90\% results in over 300\% performan
 
 Over the years, a variety of branch prediction models have been developed to improve the accuracy of predictions. These models range from static branch predictors that use heuristics to predict the outcome of branches, to more sophisticated dynamic branch predictors (note: all models tested in this paper are dynamic) that rely on past history to make predictions. Furthermore, the emergence of  machine learning and artificial intelligence has led to the development of more advanced branch prediction techniques for both static and dynamic branch predictors.
 
-The aim of this paper is to explore the some branch prediction models and compare their performances. We will examine the underlying principles of each model, the algorithms used to make predictions and their implementations in a simulated processor.
+The aim of this paper is to explore some branch prediction models and compare their performances. We will examine the underlying principles of each model, the algorithms used to make predictions and their implementations in a simulated processor.
 
 \section{Models} \label{sec:models}
 In this section, we will cover the various branch predictor models used in the simulation.
 
 \subsection{Bimodal Predictor} \label{ssec:bimodal}
-This model was first proposed by James E. Smith as an improvement on the single-bit last-time predictor\cite{smith1981}. This is a local history predictor in the sense that the Program Counter (PC) is used to differentiate branches and their past outcomes. It stores two bits in the branch target buffer (BTB) indicating whether this particular branch was taken or not taken in the last two times encountered. These two bits encode a state machine with four states shown in Fig. 
+This model was first proposed by James E. Smith as an improvement on the single-bit last-time predictor\cite{smith1981}. This is a local history predictor in the sense that the Program Counter (PC) is used to differentiate branches and their past outcomes. It stores two bits in the branch target buffer (BTB). These two bits encode a state machine with four states shown in Fig. 
 \ref{fig:bimodal}. 
 \begin{figure}
     \centering
@@ -145,10 +145,10 @@ This model was first proposed by James E. Smith as an improvement on the single-
     \caption{Bimodal Predictor}
 	\label{fig:bimodal}
 \end{figure}
-The \textit{Strongly Taken} and \textit{Weakly Taken} states will predict \textit{taken} for the current branch, while the \textit{Strongly Not Taken} and \textit{Weakly Not Taken} states will predict \textit{not taken}.
+The \textit{Strongly Taken} and \textit{Weakly Taken} states will predict \textit{taken} for the current branch, while the \textit{Strongly Not Taken} and \textit{Weakly Not Taken} states will predict \textit{not taken}. The actual result of the current branch causes the state transitions (1 for taken and 0 for not taken on the directed edges).
 
 \subsection{Gshare Predictor} \label{ssec:gshare}
-This model was first proposed by Scott McFarling as an improvement on the global history predictor\cite{mcfarling1993}. A normal global history predictor uses the single history from the Global History Register (GHR) to index into the Pattern History Table (PHT) in order to predict all branch outcomes regardless of the PC. Gshare XORs the PC with the GHR for indexing into the PHT, which adds some local context information for the predictor to take into account.
+This model was first proposed by Scott McFarling as an improvement on the global history predictor\cite{mcfarling1993}. A normal global history predictor uses the single history from the Global History Register (GHR) to index into the Pattern History Table (PHT) in order to predict all branch outcomes regardless of the PC. Gshare XORs the PC with the GHR for indexing into the PHT, which adds some local history context information for the predictor to take into account.
 
 \subsection{Perceptron Predictor} \label{ssec:perceptron}
 This model is a single-layer version of an artificial neural network that can identify and classify patterns, first applied to branch prediction by Daniel A. Jimen\'ez and Calvin Lin\cite{jimenez2001dynamic}. In the model shown in Fig. \ref{fig:perceptron} are the input vector ($x$), the weight vector ($w$), and the output ($y$).
